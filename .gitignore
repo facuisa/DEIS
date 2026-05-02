@@ -4,3 +4,4 @@ __pycache__/
 .env
 .DS_Store
 data/mortalidad_analizada_2005_2023 prueba.csv
+key.env
