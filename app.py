@@ -4,20 +4,28 @@ DEIS 2005-2023 · Ministerio de Salud de la Nación Argentina.
 
 Estructura del proyecto:
     app.py               ← Este archivo (orquestador)
-    config.py            ← Configuración, constantes y CSS
-    data_processing.py   ← Carga, transformación y filtrado de datos
+    config.py            ← Sistema de diseño, colores, tipografía y CSS
+    data_processing.py   ← Carga, transformación, filtrado y cálculo de métricas
     ui_components.py     ← Componentes visuales, gráficos y secciones
     data/
         mortalidad_analizada_2005_2023.parquet
+        poblacion_indec_provincias_2010_2023_normalizada.parquet
 """
 
 import streamlit as st
 
-from config import setup_config
-from data_processing import apply_filters, get_subgroup_columns, load_data
+from config import setup_config, COLORS
+from data_processing import (
+    apply_filters,
+    calcular_metrica,
+    get_subgroup_columns,
+    load_data,
+    load_poblacion,
+)
 from ui_components import (
     build_sidebar,
     plot_cause_analysis,
+    plot_comparative_analysis,
     plot_territorial_analysis,
     plot_time_series,
     section_resumen,
@@ -26,65 +34,94 @@ from ui_components import (
     show_methodology_note,
 )
 
-# IMPORTANTE: setup_config() debe ser la primera llamada a Streamlit del módulo,
-# ya que contiene st.set_page_config() que solo puede ejecutarse una vez y antes
-# de cualquier otro comando de Streamlit.
+# IMPORTANTE: primera llamada a Streamlit del módulo.
 setup_config()
 
 
-def main() -> None:
-    """Función principal: orquesta la carga de datos, filtros y renderizado."""
+def _render_main_header(metrica: str) -> None:
+    """Renderiza el encabezado editorial principal."""
+    metrica_label = "Defunciones absolutas" if "absol" in metrica.lower() else "Tasa c/100.000 hab."
+    st.markdown(
+        f"""
+        <div style="padding: 8px 0 4px;">
+            <p class="main-subheader">Ministerio de Salud · DEIS · República Argentina</p>
+            <h1 class="main-header">Mortalidad en Argentina</h1>
+            <p style="font-size:0.9rem; color:{COLORS['stone']}; margin-top:6px; font-family:'Source Sans 3',sans-serif;">
+                Estadísticas vitales 2005–2023 &nbsp;·&nbsp; 24 provincias &nbsp;·&nbsp;
+                <strong style="color:{COLORS['cobalt']};">{metrica_label}</strong>
+            </p>
+        </div>
+        <hr class="header-rule">
+        """,
+        unsafe_allow_html=True,
+    )
 
-    # ── Carga de datos ────────────────────────────────────────────────────────
-    df_raw = load_data()
+
+def main() -> None:
+    """Orquesta la carga de datos, filtros y renderizado por pestaña."""
+
+    # ── Carga de datos (cacheados) ────────────────────────────────────────────
+    df_raw        = load_data()
+    df_poblacion  = load_poblacion()
     subgroup_cols = get_subgroup_columns(df_raw)
 
-    # ── Sidebar con filtros globales ──────────────────────────────────────────
-    filters = build_sidebar(df_raw)
+    # ── Sidebar con filtros globales y selector de métrica ────────────────────
+    filters  = build_sidebar(df_raw)
+    metrica  = filters["metrica"]
 
-    # ── Aplicar filtros ───────────────────────────────────────────────────────
-    df = apply_filters(df_raw, filters)
+    # ── Encabezado global ─────────────────────────────────────────────────────
+    _render_main_header(metrica)
 
-    # ── Encabezado ────────────────────────────────────────────────────────────
-    st.markdown("## 📊 Dashboard de Mortalidad en Argentina")
-    st.markdown(
-        "**Fuente:** DEIS · Ministerio de Salud de la Nación &nbsp;|&nbsp; "
-        "**Período:** 2005–2023 &nbsp;|&nbsp; "
-        "**Valores absolutos · Sin tasas**"
+    # ── Pestañas principales ──────────────────────────────────────────────────
+    tab_dash, tab_comp = st.tabs(
+        ["📊  Dashboard General", "⚖️  Comparativo Territorial"]
     )
-    show_methodology_note()
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # ── Guardia: datos vacíos ─────────────────────────────────────────────────
-    if df.empty:
-        st.warning(
-            "⚠️ La combinación de filtros seleccionada no devuelve datos. "
-            "Ajustá los filtros del sidebar."
+    # ══════════════════════════════════════════════════════
+    # PESTAÑA 1 – DASHBOARD GENERAL
+    # ══════════════════════════════════════════════════════
+    with tab_dash:
+
+        # Aplicar filtros y calcular métrica
+        df_filtrado = apply_filters(df_raw, filters)
+        df, nombre_metrica, fmt_metrica, advertencias = calcular_metrica(
+            df_filtrado, df_poblacion, filters, metrica
         )
-        return
 
-    # ── KPIs ──────────────────────────────────────────────────────────────────
-    show_kpis(df)
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        show_methodology_note(nombre_metrica)
+        st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # ── Sección A: Resumen general ────────────────────────────────────────────
-    section_resumen(df)
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        for adv in advertencias:
+            st.warning(adv)
 
-    # ── Sección B: Análisis territorial ──────────────────────────────────────
-    plot_territorial_analysis(df)
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+        if df.empty:
+            st.warning(
+                "⚠️ La combinación de filtros seleccionada no devuelve datos. "
+                "Ajustá los filtros del sidebar."
+            )
+        else:
+            show_kpis(df, nombre_metrica)
+            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # ── Sección C: Análisis por causa ─────────────────────────────────────────
-    plot_cause_analysis(df, subgroup_cols)
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+            section_resumen(df, nombre_metrica, fmt_metrica)
+            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # ── Sección D: Serie temporal ─────────────────────────────────────────────
-    plot_time_series(df)
-    st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+            plot_territorial_analysis(df, nombre_metrica, fmt_metrica)
+            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
 
-    # ── Sección E: Tabla interactiva ──────────────────────────────────────────
-    show_filtered_table(df)
+            plot_cause_analysis(df, subgroup_cols, nombre_metrica, fmt_metrica)
+            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+
+            plot_time_series(df, nombre_metrica, fmt_metrica)
+            st.markdown('<div class="custom-divider"></div>', unsafe_allow_html=True)
+
+            show_filtered_table(df, nombre_metrica)
+
+    # ══════════════════════════════════════════════════════
+    # PESTAÑA 2 – COMPARATIVO TERRITORIAL
+    # ══════════════════════════════════════════════════════
+    with tab_comp:
+        plot_comparative_analysis(df_raw, df_poblacion, filters)
 
 
 if __name__ == "__main__":

@@ -4,4 +4,14 @@ __pycache__/
 .env
 .DS_Store
 data/mortalidad_analizada_2005_2023 prueba.csv
-key.env
+# Secretos de Streamlit
+.streamlit/secrets.toml
+
+# Variables de entorno locales
+.env
+
+# Carpetas de Python (opcional, pero recomendado)
+__pycache__/
+*.pyc
+venv/
+.venv/
