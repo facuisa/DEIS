@@ -7,6 +7,74 @@ import pandas as pd
 import streamlit as st
 
 
+# Columnas del dataset principal que tienen muchos valores repetidos y se
+# usan como dimensiones/códigos/descripciones en filtros, tablas y gráficos.
+_CATEGORY_COLUMNS = [
+    "CAUSA",
+    "MAT",
+    "GRUPEDAD",
+    "source_file",
+    "provincia",
+    "sexo_desc",
+    "MAT_desc",
+    "CAUSA_norm",
+    "codigo_causa",
+    "causa_desc",
+    "EDAD_norm",
+    "CAUSA_prefijo",
+    "CAUSA_grupo_macro",
+    "CAUSA_externa_subgrupo",
+    "CAUSA_cardio_subgrupo",
+    "CAUSA_tumor_subgrupo",
+    "CAUSA_respiratoria_subgrupo",
+    "CAUSA_digestiva_subgrupo",
+    "CAUSA_infecciosa_subgrupo",
+    "CAUSA_endocrina_subgrupo",
+    "CAUSA_neuro_subgrupo",
+    "CAUSA_genitourinaria_subgrupo",
+    "CAUSA_D_subgrupo",
+    "CAUSA_R_subgrupo",
+    "CAUSA_P_subgrupo",
+    "CAUSA_Q_subgrupo",
+    "CAUSA_F_subgrupo",
+    "region",
+    "grupo_etario_estudio",
+]
+
+_NUMERIC_DOWNCAST_COLUMNS = [
+    "PROVRES",
+    "SEXO",
+    "CUENTA",
+    "anio",
+    "PROVRES_norm",
+    "codigo",
+    "SEXO_norm",
+    "codigo_sexo",
+    "EDAD_orden",
+]
+
+
+def optimize_dtypes(df: pd.DataFrame) -> pd.DataFrame:
+    """Reduce memoria del dataset sin cambiar valores ni columnas.
+
+    - Convierte dimensiones textuales repetitivas a ``category``.
+    - Reduce enteros a subtipos más chicos con ``downcast="integer"``.
+
+    Devuelve una copia optimizada para no mutar el DataFrame recibido.
+    """
+    optimized = df.copy()
+
+    for col in _CATEGORY_COLUMNS:
+        if col in optimized.columns and optimized[col].dtype == "object":
+            optimized[col] = optimized[col].astype("category")
+
+    for col in _NUMERIC_DOWNCAST_COLUMNS:
+        if col in optimized.columns:
+            optimized[col] = pd.to_numeric(optimized[col], downcast="integer")
+
+    return optimized
+
+
 # ─────────────────────────────────────────────
 # ANÁLISIS AUTOMÁTICO POR IA (con caché)
 # ─────────────────────────────────────────────
@@ -104,7 +172,7 @@ def load_data() -> pd.DataFrame:
     df.columns = df.columns.str.strip()
     df["CUENTA"] = pd.to_numeric(df["CUENTA"], errors="coerce").fillna(0).astype(int)
     df["anio"] = pd.to_numeric(df["anio"], errors="coerce")
-    return df
+    return optimize_dtypes(df)
 
 
 @st.cache_data(show_spinner="Cargando población INDEC…")
