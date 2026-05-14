@@ -6,7 +6,6 @@ Diseño editorial premium: paleta Navy · Pearl · Vermillion.
 
 import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go
 import streamlit as st
 
 from ui_utils import (
@@ -40,76 +39,22 @@ from src.analysis.aggregations import (
     comparison_top_causes,
     comparison_treemap_data,
     distribution_by,
-    filtered_table_aggregate,
-    metric_by_province_year,
     subgroup_distribution,
     territorial_heatmap_data,
     territorial_ranking,
     time_series_by,
     time_series_by_sex,
     time_series_total,
-    top_causes,
 )
-
-# ─────────────────────────────────────────────
-# LAYOUT BASE PLOTLY – aplicado a todos los figs
-# ─────────────────────────────────────────────
-_BASE_LAYOUT = dict(
-    font=dict(family="Source Sans 3, sans-serif", size=12, color=COLORS["ink"]),
-    plot_bgcolor="white",
-    paper_bgcolor="rgba(0,0,0,0)",
-    margin=dict(l=10, r=10, t=48, b=16),
-    hoverlabel=dict(
-        bgcolor=COLORS["navy"],
-        font_color="white",
-        font_family="Source Sans 3, sans-serif",
-        font_size=13,
-        bordercolor=COLORS["navy"],
-    ),
-    title_font=dict(
-        family="Source Sans 3, sans-serif",
-        size=14,
-        color=COLORS["navy"],
-    ),
-    xaxis=dict(
-        showgrid=True,
-        gridcolor="#ECECEA",
-        gridwidth=1,
-        zeroline=False,
-        linecolor=COLORS["warm_gray"],
-        tickfont=dict(size=11, color=COLORS["stone"]),
-        title_font=dict(size=12, color=COLORS["stone"]),
-    ),
-    yaxis=dict(
-        showgrid=True,
-        gridcolor="#ECECEA",
-        gridwidth=1,
-        zeroline=False,
-        linecolor=COLORS["warm_gray"],
-        tickfont=dict(size=11, color=COLORS["stone"]),
-        title_font=dict(size=12, color=COLORS["stone"]),
-    ),
-    legend=dict(
-        font=dict(size=11, color=COLORS["ink"]),
-        bgcolor="rgba(0,0,0,0)",
-    ),
+from src.ui.dashboard_general import (
+    plot_age_distribution,
+    plot_sex_distribution,
+    plot_top_causes,
+    section_resumen,
 )
-
-
-def _apply_base(fig: go.Figure, height: int = 400) -> go.Figure:
-    """Aplica layout base premium a cualquier figura Plotly."""
-    fig.update_layout(height=height, **_BASE_LAYOUT)
-    return fig
-
-
-def _fill_metric_na(df: pd.DataFrame, metric_cols: list[str]) -> pd.DataFrame:
-    """Rellena faltantes solo en columnas métricas, no en categóricas."""
-    out = df.copy()
-    existing_metric_cols = [col for col in metric_cols if col in out.columns]
-    if existing_metric_cols:
-        out[existing_metric_cols] = out[existing_metric_cols].fillna(0)
-    return out
-
+from src.ui.kpis import show_kpis
+from src.ui.plotting import _apply_base, _fill_metric_na
+from src.ui.tables import show_filtered_table
 
 # ═══════════════════════════════════════════════════════
 # SIDEBAR – FILTROS GLOBALES
@@ -200,148 +145,6 @@ def build_sidebar(df: pd.DataFrame) -> dict:
         "causa_macro": causa_sel,
         "metrica":     metrica,
     }
-
-
-# ═══════════════════════════════════════════════════════
-# KPIs – DASHBOARD GENERAL
-# ═══════════════════════════════════════════════════════
-def show_kpis(df: pd.DataFrame, nombre_metrica: str = "Defunciones") -> None:
-    n_provincias = df["provincia"].nunique()
-    n_causas     = df["causa_desc"].nunique()
-    n_anios      = df["anio"].nunique()
-
-    if nombre_metrica == "Defunciones":
-        total_val = df["valor_metrica"].sum()
-        val_fmt   = f"{total_val:,.0f}"
-        val_label = "Total Defunciones"
-        val_sub   = f"promedio {total_val/max(n_anios,1):,.0f}/año"
-    else:
-        tasa_prov_anio = metric_by_province_year(df)["valor_metrica"]
-        mediana = tasa_prov_anio.median()
-        maximo  = tasa_prov_anio.max()
-        val_fmt   = f"{mediana:,.1f}"
-        val_label = "Tasa mediana c/100k"
-        val_sub   = f"máx. {maximo:,.1f}"
-
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        render_kpi_card(val_label, val_fmt, val_sub)
-    with c2:
-        render_kpi_card("Provincias", str(n_provincias), "con datos en el período", "kpi-card-green")
-    with c3:
-        render_kpi_card("Causas registradas", str(n_causas), "diagnósticos distintos", "kpi-card-accent")
-    with c4:
-        render_kpi_card("Años con datos", str(n_anios), "serie temporal completa", "kpi-card-amber")
-
-
-# ═══════════════════════════════════════════════════════
-# SECCIÓN A – RESUMEN GENERAL
-# ═══════════════════════════════════════════════════════
-def plot_top_causes(
-    df: pd.DataFrame,
-    nombre_metrica: str = "Defunciones",
-    fmt: str = ":,.0f",
-    n: int = 10,
-) -> None:
-    pct_txt = _pct_label(nombre_metrica)
-    top = top_causes(df, n)
-    top = _agregar_pct(top)
-
-    fig = px.bar(
-        top, x="valor_metrica", y="causa_desc", orientation="h",
-        title=f"Top {n} causas · {nombre_metrica}",
-        labels={"valor_metrica": nombre_metrica, "causa_desc": ""},
-        color="valor_metrica",
-        color_continuous_scale=COLOR_SCALE_NAVY,
-        template=PLOTLY_TEMPLATE,
-        custom_data=["pct"],
-    )
-    fig.update_layout(
-        coloraxis_showscale=False,
-        height=max(380, n * 36),
-        yaxis=dict(tickfont=dict(size=11)),
-    )
-    _apply_base(fig, height=max(380, n * 36))
-    fig.update_traces(
-        hovertemplate=_hover_h(nombre_metrica, fmt, pct_txt),
-        marker_line_width=0,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    _mostrar_analisis_ia(top, f"Top {n} causas · {nombre_metrica}")
-
-
-def plot_sex_distribution(
-    df: pd.DataFrame,
-    nombre_metrica: str = "Defunciones",
-    fmt: str = ":,.0f",
-) -> None:
-    pct_txt = _pct_label(nombre_metrica)
-    sex = distribution_by(df, "sexo_desc")
-    sex = _agregar_pct(sex)
-
-    fig = px.bar(
-        sex, x="sexo_desc", y="valor_metrica",
-        title=f"{nombre_metrica} por sexo",
-        labels={"valor_metrica": nombre_metrica, "sexo_desc": ""},
-        color="sexo_desc",
-        color_discrete_sequence=COLOR_SEQ,
-        template=PLOTLY_TEMPLATE,
-        custom_data=["pct"],
-    )
-    fig.update_layout(showlegend=False)
-    _apply_base(fig, height=320)
-    fig.update_traces(
-        hovertemplate=_hover_v(nombre_metrica, fmt, pct_txt),
-        marker_line_width=0,
-        width=0.55,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    _mostrar_analisis_ia(sex, f"{nombre_metrica} por sexo")
-
-
-def plot_age_distribution(
-    df: pd.DataFrame,
-    nombre_metrica: str = "Defunciones",
-    fmt: str = ":,.0f",
-) -> None:
-    pct_txt = _pct_label(nombre_metrica)
-    age = distribution_by(df, "EDAD_norm", sort_desc=True)
-    age = _agregar_pct(age)
-
-    fig = px.bar(
-        age, x="EDAD_norm", y="valor_metrica",
-        title=f"{nombre_metrica} por grupo etario",
-        labels={"valor_metrica": nombre_metrica, "EDAD_norm": ""},
-        color="valor_metrica",
-        color_continuous_scale=COLOR_SCALE_NAVY,
-        template=PLOTLY_TEMPLATE,
-        custom_data=["pct"],
-    )
-    fig.update_layout(
-        coloraxis_showscale=False,
-        xaxis_tickangle=-35,
-    )
-    _apply_base(fig, height=320)
-    fig.update_traces(
-        hovertemplate=_hover_v(nombre_metrica, fmt, pct_txt),
-        marker_line_width=0,
-    )
-    st.plotly_chart(fig, use_container_width=True)
-    _mostrar_analisis_ia(age, f"{nombre_metrica} por grupo etario")
-
-
-def section_resumen(df: pd.DataFrame, nombre_metrica: str = "Defunciones", fmt: str = ":,.0f") -> None:
-    st.markdown('<div class="section-header">A · Resumen General</div>', unsafe_allow_html=True)
-    
-    plot_top_causes(df, nombre_metrica, fmt)
-    
-    st.divider() # <--- Reemplaza el div custom por el nativo de Streamlit si prefieres limpieza
-    
-    c1, c2 = st.columns(2)
-    with c1:
-        plot_sex_distribution(df, nombre_metrica, fmt)
-    with c2:
-        plot_age_distribution(df, nombre_metrica, fmt)
 
 
 # ═══════════════════════════════════════════════════════
@@ -629,31 +432,6 @@ def plot_time_series(
             st.plotly_chart(fig2, use_container_width=True)
             _mostrar_analisis_ia(ts_sex, f"{nombre_metrica} anuales por sexo (apiladas)")
 
-
-# ═══════════════════════════════════════════════════════
-# SECCIÓN E – TABLA INTERACTIVA
-# ═══════════════════════════════════════════════════════
-def show_filtered_table(df: pd.DataFrame, nombre_metrica: str = "Defunciones") -> None:
-    st.markdown('<div class="section-header">E · Tabla de Datos Filtrados</div>', unsafe_allow_html=True)
-
-    with st.expander("Ver tabla de datos (filtrada)", expanded=False):
-        if nombre_metrica != "Defunciones":
-            st.info("ℹ️ En modo **Tasa c/100k**, se muestra la vista agregada.")
-            vista = "Agregada por causa y año"
-        else:
-            vista = st.radio("Modo de vista:", ["Agregada por causa y año", "Registros crudos (primeros 2.000)"], horizontal=True)
-
-        if vista == "Agregada por causa y año":
-            group_cols = [c for c in ["anio", "provincia", "CAUSA_grupo_macro", "causa_desc", "sexo_desc"] if c in df.columns]
-            show_df = filtered_table_aggregate(df, group_cols).rename(columns={"valor_metrica": nombre_metrica})
-        else:
-            show_df = df.head(2_000).copy().rename(columns={"valor_metrica": nombre_metrica})
-
-        # Usamos el buscador nativo de Streamlit que es más eficiente
-        st.dataframe(show_df, use_container_width=True, height=400)
-
-        csv_export = show_df.to_csv(index=False).encode("utf-8")
-        st.download_button("⬇️ Descargar CSV filtrado completo", csv_export, "mortalidad_filtrado.csv", "text/csv")
 
 # ═══════════════════════════════════════════════════════
 # NOTA METODOLÓGICA
