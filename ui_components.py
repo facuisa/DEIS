@@ -32,6 +32,25 @@ from config import (
     PLOTLY_TEMPLATE,
 )
 
+from src.analysis.aggregations import (
+    comparison_cause_gap,
+    comparison_distribution,
+    comparison_table_parts,
+    comparison_time_series,
+    comparison_top_causes,
+    comparison_treemap_data,
+    distribution_by,
+    filtered_table_aggregate,
+    metric_by_province_year,
+    subgroup_distribution,
+    territorial_heatmap_data,
+    territorial_ranking,
+    time_series_by,
+    time_series_by_sex,
+    time_series_total,
+    top_causes,
+)
+
 # ─────────────────────────────────────────────
 # LAYOUT BASE PLOTLY – aplicado a todos los figs
 # ─────────────────────────────────────────────
@@ -82,6 +101,14 @@ def _apply_base(fig: go.Figure, height: int = 400) -> go.Figure:
     fig.update_layout(height=height, **_BASE_LAYOUT)
     return fig
 
+
+def _fill_metric_na(df: pd.DataFrame, metric_cols: list[str]) -> pd.DataFrame:
+    """Rellena faltantes solo en columnas métricas, no en categóricas."""
+    out = df.copy()
+    existing_metric_cols = [col for col in metric_cols if col in out.columns]
+    if existing_metric_cols:
+        out[existing_metric_cols] = out[existing_metric_cols].fillna(0)
+    return out
 
 
 # ═══════════════════════════════════════════════════════
@@ -189,7 +216,7 @@ def show_kpis(df: pd.DataFrame, nombre_metrica: str = "Defunciones") -> None:
         val_label = "Total Defunciones"
         val_sub   = f"promedio {total_val/max(n_anios,1):,.0f}/año"
     else:
-        tasa_prov_anio = df.groupby(["provincia", "anio"])["valor_metrica"].sum()
+        tasa_prov_anio = metric_by_province_year(df)["valor_metrica"]
         mediana = tasa_prov_anio.median()
         maximo  = tasa_prov_anio.max()
         val_fmt   = f"{mediana:,.1f}"
@@ -217,10 +244,7 @@ def plot_top_causes(
     n: int = 10,
 ) -> None:
     pct_txt = _pct_label(nombre_metrica)
-    top = (
-        df.groupby("causa_desc")["valor_metrica"]
-        .sum().nlargest(n).reset_index().sort_values("valor_metrica")
-    )
+    top = top_causes(df, n)
     top = _agregar_pct(top)
 
     fig = px.bar(
@@ -252,7 +276,7 @@ def plot_sex_distribution(
     fmt: str = ":,.0f",
 ) -> None:
     pct_txt = _pct_label(nombre_metrica)
-    sex = df.groupby("sexo_desc")["valor_metrica"].sum().reset_index()
+    sex = distribution_by(df, "sexo_desc")
     sex = _agregar_pct(sex)
 
     fig = px.bar(
@@ -281,10 +305,7 @@ def plot_age_distribution(
     fmt: str = ":,.0f",
 ) -> None:
     pct_txt = _pct_label(nombre_metrica)
-    age = (
-        df.groupby("EDAD_norm")["valor_metrica"]
-        .sum().reset_index().sort_values("valor_metrica", ascending=False)
-    )
+    age = distribution_by(df, "EDAD_norm", sort_desc=True)
     age = _agregar_pct(age)
 
     fig = px.bar(
@@ -340,10 +361,7 @@ def plot_territorial_analysis(
     nivel = st.radio("Ver por:", ["Región", "Provincia"], horizontal=True, key="territorial_nivel")
     col_geo = "region" if nivel == "Región" else "provincia"
 
-    ranking = (
-        df.groupby(col_geo)["valor_metrica"]
-        .sum().reset_index().sort_values("valor_metrica", ascending=True)
-    )
+    ranking = territorial_ranking(df, col_geo)
     ranking = _agregar_pct(ranking)
 
     fig_rank = px.bar(
@@ -371,14 +389,7 @@ def plot_territorial_analysis(
         f'margin:20px 0 8px;">Distribución por causa macro y {nivel.lower()} · heatmap</p>',
         unsafe_allow_html=True,
     )
-    pivot_src = (
-        df.groupby([col_geo, "CAUSA_grupo_macro"])["valor_metrica"].sum().reset_index()
-    )
-    pivot = (
-        pivot_src
-        .pivot(index=col_geo, columns="CAUSA_grupo_macro", values="valor_metrica")
-        .fillna(0)
-    )
+    pivot_src, pivot, pivot_resumen = territorial_heatmap_data(df, col_geo)
     fig_heat = px.imshow(
         pivot,
         color_continuous_scale=COLOR_SCALE_NAVY,
@@ -395,10 +406,7 @@ def plot_territorial_analysis(
     )
     st.plotly_chart(fig_heat, use_container_width=True)
 
-    pivot_resumen = (
-        pivot_src[pivot_src["valor_metrica"] > 0]
-        .sort_values("valor_metrica", ascending=False).head(30)
-    )
+
     _mostrar_analisis_ia(
         pivot_resumen,
         f"{nombre_metrica} por {nivel.lower()} y grupo de causa",
@@ -428,7 +436,7 @@ def plot_cause_analysis(
 
     c1, c2 = st.columns(2)
     with c1:
-        sex_c = dfc.groupby("sexo_desc")["valor_metrica"].sum().reset_index()
+        sex_c = distribution_by(dfc, "sexo_desc")
         sex_c = _agregar_pct(sex_c)
         fig_s = px.bar(
             sex_c, x="sexo_desc", y="valor_metrica",
@@ -450,7 +458,7 @@ def plot_cause_analysis(
         _mostrar_analisis_ia(sex_c, f"{nombre_metrica} por sexo · {causa_sel}")
 
     with c2:
-        age_c = dfc.groupby("EDAD_norm")["valor_metrica"].sum().reset_index()
+        age_c = distribution_by(dfc, "EDAD_norm")
         age_c = _agregar_pct(age_c)
         fig_a = px.bar(
             age_c, x="EDAD_norm", y="valor_metrica",
@@ -489,13 +497,7 @@ def plot_cause_analysis(
             unsafe_allow_html=True,
         )
         for sub_col in relevant_subs:
-            sub_df = (
-                dfc.groupby(sub_col)["valor_metrica"]
-                .sum().reset_index()
-                .dropna(subset=[sub_col])
-                .query(f"`{sub_col}` != ''")
-                .sort_values("valor_metrica", ascending=True)
-            )
+            sub_df = subgroup_distribution(dfc, sub_col)
             if sub_df.empty:
                 continue
             sub_df = _agregar_pct(sub_df)
@@ -546,7 +548,7 @@ def plot_time_series(
             max_cat = st.slider("Categorías", 2, 10, 5, key="ts_max_cat")
 
     if modo == "Sin desglose":
-        ts = df.groupby("anio")["valor_metrica"].sum().reset_index()
+        ts = time_series_total(df)
         fig = px.line(
             ts, x="anio", y="valor_metrica",
             title=f"Evolución anual · {nombre_metrica}",
@@ -569,13 +571,7 @@ def plot_time_series(
             "Región": "region",
         }
         col = col_map[modo]
-        top_cats = (
-            df.groupby(col)["valor_metrica"].sum().nlargest(max_cat).index.tolist()
-        )
-        ts = (
-            df[df[col].isin(top_cats)]
-            .groupby(["anio", col])["valor_metrica"].sum().reset_index()
-        )
+        ts = time_series_by(df, col, max_cat)
         fig = px.line(
             ts, x="anio", y="valor_metrica", color=col,
             title=f"Evolución anual · {nombre_metrica} por {modo.lower()}",
@@ -612,7 +608,7 @@ def plot_time_series(
                 f'margin:20px 0 8px;">{nombre_metrica} anual por sexo · barras apiladas</p>',
                 unsafe_allow_html=True,
             )
-            ts_sex = df.groupby(["anio", "sexo_desc"])["valor_metrica"].sum().reset_index()
+            ts_sex = time_series_by_sex(df)
             fig2 = px.bar(
                 ts_sex, x="anio", y="valor_metrica", color="sexo_desc",
                 barmode="stack",
@@ -649,16 +645,14 @@ def show_filtered_table(df: pd.DataFrame, nombre_metrica: str = "Defunciones") -
 
         if vista == "Agregada por causa y año":
             group_cols = [c for c in ["anio", "provincia", "CAUSA_grupo_macro", "causa_desc", "sexo_desc"] if c in df.columns]
-            show_df = (df.groupby(group_cols)[["CUENTA", "valor_metrica"]].sum().reset_index()
-                       .sort_values(["anio", "valor_metrica"], ascending=[True, False])
-                       .rename(columns={"valor_metrica": nombre_metrica}))
+            show_df = filtered_table_aggregate(df, group_cols).rename(columns={"valor_metrica": nombre_metrica})
         else:
             show_df = df.head(2_000).copy().rename(columns={"valor_metrica": nombre_metrica})
 
         # Usamos el buscador nativo de Streamlit que es más eficiente
         st.dataframe(show_df, use_container_width=True, height=400)
 
-        csv_export = df.to_csv(index=False).encode("utf-8")
+        csv_export = show_df.to_csv(index=False).encode("utf-8")
         st.download_button("⬇️ Descargar CSV filtrado completo", csv_export, "mortalidad_filtrado.csv", "text/csv")
 
 # ═══════════════════════════════════════════════════════
@@ -751,17 +745,15 @@ def plot_comparative_analysis(
     )
 
     if nombre_metrica != "Defunciones":
-        tasa_anual_a = df_a.groupby("anio")["valor_metrica"].sum().mean()
-        tasa_anual_b = df_b.groupby("anio")["valor_metrica"].sum().mean()
+        tasa_anual_a = time_series_total(df_a)["valor_metrica"].mean()
+        tasa_anual_b = time_series_total(df_b)["valor_metrica"].mean()
         st.markdown("<br>", unsafe_allow_html=True)
         render_comparison_kpi_row("Tasa promedio anual c/100k", tasa_anual_a, tasa_anual_b, prov_a, prov_b, ",.2f", ",.2f")
 
     st.divider()
 
     # ── Gráfico Evolución ───────────────────────────────────────────────────
-    ts_a = df_a.groupby("anio")["valor_metrica"].sum().reset_index().assign(provincia=prov_a)
-    ts_b = df_b.groupby("anio")["valor_metrica"].sum().reset_index().assign(provincia=prov_b)
-    ts_comp = pd.concat([ts_a, ts_b], ignore_index=True)
+    ts_comp = comparison_time_series(df_a, df_b, prov_a, prov_b)
 
     fig_ts = px.line(ts_comp, x="anio", y="valor_metrica", color="provincia", 
                      title=f"Evolución anual · {nombre_metrica}", markers=True, template=PLOTLY_TEMPLATE)
@@ -775,8 +767,8 @@ def plot_comparative_analysis(
 
     n_top = st.slider("Número de causas a comparar", 5, 20, 10, key="comp_n_causas")
 
-    top_a = df_a.groupby("causa_desc")["valor_metrica"].sum().nlargest(n_top).reset_index().assign(provincia=prov_a)
-    top_b = df_b.groupby("causa_desc")["valor_metrica"].sum().nlargest(n_top).reset_index().assign(provincia=prov_b)
+    top_a = comparison_top_causes(df_a, prov_a, n_top)
+    top_b = comparison_top_causes(df_b, prov_b, n_top)
 
     c1, c2 = st.columns(2)
     with c1:
@@ -798,13 +790,8 @@ def plot_comparative_analysis(
     # ── Gráfico de Brechas ────────────────────────────────────────────────────
     st.markdown(f'<p style="font-size:0.85rem;color:#666;font-weight:600;margin-top:20px;">Brecha entre provincias por causa</p>', unsafe_allow_html=True)
     
-    causas_comunes = set(top_a["causa_desc"]) & set(top_b["causa_desc"])
-    if causas_comunes:
-        m_a = top_a[top_a["causa_desc"].isin(causas_comunes)][["causa_desc", "valor_metrica"]].rename(columns={"valor_metrica": prov_a})
-        m_b = top_b[top_b["causa_desc"].isin(causas_comunes)][["causa_desc", "valor_metrica"]].rename(columns={"valor_metrica": prov_b})
-        merge_causas = m_a.merge(m_b, on="causa_desc")
-        merge_causas["brecha"] = merge_causas[prov_b] - merge_causas[prov_a]
-        merge_causas = merge_causas.sort_values("brecha")
+    merge_causas = comparison_cause_gap(top_a, top_b, prov_a, prov_b)
+    if not merge_causas.empty:
 
         fig_brecha = px.bar(merge_causas, x="brecha", y="causa_desc", orientation="h",
                             title=f"Brecha {prov_b} vs {prov_a}", color="brecha",
@@ -818,9 +805,7 @@ def plot_comparative_analysis(
     # ── Gráfico 3 – Distribución por Sexo ────────────────────────────────────
     st.markdown('<div class="section-header-compare">3 · Distribución por Sexo</div>', unsafe_allow_html=True)
 
-    sex_a = df_a.groupby("sexo_desc")["valor_metrica"].sum().reset_index().assign(provincia=prov_a)
-    sex_b = df_b.groupby("sexo_desc")["valor_metrica"].sum().reset_index().assign(provincia=prov_b)
-    sex_comp = pd.concat([sex_a, sex_b], ignore_index=True)
+    sex_comp = comparison_distribution(df_a, df_b, "sexo_desc", prov_a, prov_b)
 
     fig_sex = px.bar(sex_comp, x="sexo_desc", y="valor_metrica", color="provincia",
                      barmode="group", title=f"{nombre_metrica} por sexo · comparativo",
@@ -834,9 +819,7 @@ def plot_comparative_analysis(
     # ── Gráfico 4 – Distribución por Edad ────────────────────────────────────
     st.markdown('<div class="section-header-compare">4 · Distribución por Grupo Etario</div>', unsafe_allow_html=True)
 
-    age_a = df_a.groupby("EDAD_norm")["valor_metrica"].sum().reset_index().assign(provincia=prov_a)
-    age_b = df_b.groupby("EDAD_norm")["valor_metrica"].sum().reset_index().assign(provincia=prov_b)
-    age_comp = pd.concat([age_a, age_b], ignore_index=True)
+    age_comp = comparison_distribution(df_a, df_b, "EDAD_norm", prov_a, prov_b)
 
     fig_age = px.bar(age_comp, x="EDAD_norm", y="valor_metrica", color="provincia",
                      barmode="group", title=f"{nombre_metrica} por grupo etario · comparativo",
@@ -850,10 +833,7 @@ def plot_comparative_analysis(
     # ── Gráfico 5 – Treemap Proporcional ──────────────────────────────────────
     st.markdown('<div class="section-header-compare">5 · Mapa Proporcional de Causas</div>', unsafe_allow_html=True)
     
-    treemap_a = df_a.groupby(["CAUSA_grupo_macro", "causa_desc"])["valor_metrica"].sum().reset_index().assign(provincia=prov_a)
-    treemap_b = df_b.groupby(["CAUSA_grupo_macro", "causa_desc"])["valor_metrica"].sum().reset_index().assign(provincia=prov_b)
-    treemap_comp = pd.concat([treemap_a, treemap_b], ignore_index=True)
-    treemap_comp = treemap_comp[treemap_comp["valor_metrica"] > 0]
+    treemap_comp = comparison_treemap_data(df_a, df_b, prov_a, prov_b)
 
     fig_tree = px.treemap(treemap_comp, path=["provincia", "CAUSA_grupo_macro", "causa_desc"], 
                           values="valor_metrica", color="valor_metrica",
@@ -867,11 +847,13 @@ def plot_comparative_analysis(
         group_cols = [c for c in ["anio", "CAUSA_grupo_macro", "causa_desc"] if c in df_a.columns]
         
         # Agrupamos solo por la métrica para evitar conflictos de columnas duplicadas
-        tbl_a = df_a.groupby(group_cols)["valor_metrica"].sum().reset_index().rename(columns={"valor_metrica": f"{nombre_metrica}_{prov_a}"})
-        tbl_b = df_b.groupby(group_cols)["valor_metrica"].sum().reset_index().rename(columns={"valor_metrica": f"{nombre_metrica}_{prov_b}"})
+        tbl_a, tbl_b = comparison_table_parts(
+            df_a, df_b, group_cols, nombre_metrica, prov_a, prov_b
+        )
         
-        tbl_comp = tbl_a.merge(tbl_b, on=group_cols, how="outer").fillna(0)
+        tbl_comp = tbl_a.merge(tbl_b, on=group_cols, how="outer")
         col_a, col_b = f"{nombre_metrica}_{prov_a}", f"{nombre_metrica}_{prov_b}"
+        tbl_comp = _fill_metric_na(tbl_comp, [col_a, col_b])
         
         tbl_comp["diferencia"] = tbl_comp[col_b].astype(float) - tbl_comp[col_a].astype(float)
         tbl_comp = tbl_comp.sort_values("diferencia", key=abs, ascending=False)
